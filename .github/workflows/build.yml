@@ -1,0 +1,229 @@
+name: Build
+
+on:
+  push:
+    tags: '*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        type: string
+        description: 'Tag Name to be created'
+
+jobs:
+  create_release:
+    name: Create Release
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - name: Decide tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "version=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF/refs\/*s\//}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh release view -R ${{ github.repository }} ${{ steps.tag.outputs.version }}; then
+            gh release create -R ${{ github.repository }} ${{ steps.tag.outputs.version }} -d -t ${{ steps.tag.outputs.version }} -n '## Linux
+
+          Depends on:
+
+          - `libmecab2`, `libkakasi2`, and `mecab-ipadic-utf8` on Debian-based.
+          - `mecab-ipadic`, `kakasi-libs`, and `kakasi-dict` on Fedora-based.
+
+          Supports glibc 2.34 and later.
+
+          ## macOS (Intel/Arm Universal)
+
+          Requires `mecab` and `mecab-ipadic` (UTF-8, available through [Homebrew](https://brew.sh/)) to be installed. You must set `KANWADICTPATH` and `ITAIJIDICTPATH` for `YomiGenesis-bin` to let it know the KAKASI dictionary path (included). You may also need `MECAB_DICT` for xtbconv depending on your mecab dictionary path.
+
+          Supports macOS 15 Sequoia and later.'
+          fi
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    needs: [create_release]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libxml2-dev liblzma-dev zlib1g-dev libicu-dev libmecab-dev libkakasi2-dev \
+            mecab-ipadic-utf8 kakasi-dic
+
+      - name: Build all programs
+        run: make -C build.linux -j"$(nproc)" XML_PC="$(pkg-config --static --libs libxml-2.0)"
+
+      - name: Verify and package
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+
+          build.linux/MkXTBWikiplexus-bin -h >/dev/null
+          build.linux/MkXTBIndexDB-bin -h >/dev/null
+          build.linux/MkImageComplex-bin -h >/dev/null
+          build.linux/MkRax-bin -h >/dev/null
+          printf '日本,日本\n' | build.linux/YomiGenesis-bin > "$RUNNER_TEMP/yomi.csv"
+          test -s "$RUNNER_TEMP/yomi.csv"
+
+          mkdir -p "dist/linux-$TARGET_ARCH"
+          for name in MkXTBWikiplexus MkXTBIndexDB MkImageComplex YomiGenesis MkRax; do
+            test -x "build.linux/$name-bin"
+            mv "build.linux/$name-bin" "dist/linux-$TARGET_ARCH/"
+          done
+          mv Scripts/{xtbconv,info-plists} "dist/linux-$TARGET_ARCH/"
+          tar -czf "dist/linux-$TARGET_ARCH.tar.gz" -C "dist/linux-$TARGET_ARCH" .
+
+      - name: Publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload -R ${{ github.repository }} "${{ needs.create_release.outputs.version }}" dist/linux-${{ matrix.arch }}.tar.gz --clobber
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    needs: [create_release]
+    runs-on: macos-15
+    strategy:
+      matrix:
+        arch: [x86_64, arm64]
+    env:
+      TARGET_ARCH: ${{ matrix.arch }}
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET_ARCH" == "x86_64" && "$(uname -m)" != "x86_64" ]]; then
+            if ! arch -x86_64 /usr/bin/true >/dev/null 2>&1; then
+              sudo softwareupdate --install-rosetta --agree-to-license
+            fi
+            sudo chown -R "$(whoami):admin" /usr/local
+            if [[ ! -x /usr/local/Homebrew/bin/brew ]]; then
+              git clone -b 6.0.22 --depth 1 https://github.com/Homebrew/brew.git /usr/local/Homebrew
+              sudo ln -sf /usr/local/Homebrew/bin/brew /usr/local/bin/brew
+            fi
+            export PATH="/usr/local/bin:/usr/local/sbin:$PATH"
+            exec arch -x86_64 /bin/bash --noprofile --norc -e -o pipefail "$0"
+          fi
+
+          brew install xz mecab mecab-ipadic
+
+      - name: Build static KAKASI
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET_ARCH" == "x86_64" && "$(uname -m)" != "x86_64" ]]; then
+            export PATH="/usr/local/bin:/usr/local/sbin:$PATH"
+            exec arch -x86_64 /bin/bash --noprofile --norc -e -o pipefail "$0"
+          fi
+
+          git clone --depth 1 https://github.com/loretoparisi/kakasi.git "$RUNNER_TEMP/kakasi-src"
+          cd "$RUNNER_TEMP/kakasi-src"
+          CFLAGS='-O2 -Wno-error=implicit-function-declaration' \
+            ./configure --prefix="$RUNNER_TEMP/kakasi" --disable-shared --enable-static
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
+          test -f "$RUNNER_TEMP/kakasi/lib/libkakasi.a"
+
+      - name: Build all programs
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET_ARCH" == "x86_64" && "$(uname -m)" != "x86_64" ]]; then
+            export PATH="/usr/local/bin:/usr/local/sbin:$PATH"
+            exec arch -x86_64 /bin/bash --noprofile --norc -e -o pipefail "$0"
+          fi
+
+          make -C build.osx -j"$(sysctl -n hw.ncpu)" KAKASI_PREFIX="$RUNNER_TEMP/kakasi"
+
+      - name: Verify and package
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET_ARCH" == "x86_64" && "$(uname -m)" != "x86_64" ]]; then
+            export PATH="/usr/local/bin:/usr/local/sbin:$PATH"
+            exec arch -x86_64 /bin/bash --noprofile --norc -e -o pipefail "$0"
+          fi
+
+          build.osx/MkXTBWikiplexus-bin -h >/dev/null
+          build.osx/MkXTBIndexDB-bin -h >/dev/null
+          build.osx/MkImageComplex-bin -h >/dev/null
+          build.osx/MkRax-bin -h >/dev/null
+          KANWADICTPATH="$RUNNER_TEMP/kakasi/share/kakasi/kanwadict" \
+          ITAIJIDICTPATH="$RUNNER_TEMP/kakasi/share/kakasi/itaijidict" \
+            build.osx/YomiGenesis-bin "$(brew --prefix)/lib/mecab/dic/ipadic" \
+            < <(printf '日本,日本\n') > "$RUNNER_TEMP/yomi.csv"
+          test -s "$RUNNER_TEMP/yomi.csv"
+          otool -L build.osx/YomiGenesis-bin | grep -E 'libmecab.*\.dylib'
+
+          mkdir -p "dist/macos-$TARGET_ARCH/kakasi"
+          for name in MkXTBWikiplexus MkXTBIndexDB MkImageComplex YomiGenesis MkRax; do
+            binary="build.osx/$name-bin"
+            test -x "$binary"
+            test "$(lipo -archs "$binary")" = "$TARGET_ARCH"
+            mv "$binary" "dist/macos-$TARGET_ARCH/"
+          done
+          mv Scripts/{xtbconv,info-plists} "dist/macos-$TARGET_ARCH/"
+          mv "$RUNNER_TEMP/kakasi/share/kakasi/"{kanwadict,itaijidict} "dist/macos-$TARGET_ARCH/kakasi/"
+          tar -czf "dist/macos-$TARGET_ARCH.tar.gz" -C "dist/macos-$TARGET_ARCH" .
+
+      - name: Publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload -R ${{ github.repository }} "${{ needs.create_release.outputs.version }}" dist/macos-${{ matrix.arch }}.tar.gz --clobber
+
+  macos-universal:
+    name: macOS Universal (x86_64 + arm64)
+    needs: [create_release, macos]
+    runs-on: macos-latest
+    steps:
+      - name: Download macOS archives
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${{ inputs.tag }}" ]; then
+            gh release download -R ${{ github.repository }} "${{ inputs.tag }}" -p macos-x86_64.tar.gz -D inputs/x86_64
+            gh release download -R ${{ github.repository }} "${{ inputs.tag }}" -p macos-arm64.tar.gz -D inputs/arm64
+          else
+            gh release download -R ${{ github.repository }} "${GITHUB_REF/refs\/*s\//}" -p macos-x86_64.tar.gz -D inputs/x86_64
+            gh release download -R ${{ github.repository }} "${GITHUB_REF/refs\/*s\//}" -p macos-arm64.tar.gz -D inputs/arm64
+          fi
+
+      - name: Combine architectures
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist/macos-universal extracted/x86_64 extracted/arm64
+          tar -xzf inputs/x86_64/macos-x86_64.tar.gz -C extracted/x86_64
+          tar -xzf inputs/arm64/macos-arm64.tar.gz -C extracted/arm64
+          for name in MkXTBWikiplexus MkXTBIndexDB MkImageComplex YomiGenesis MkRax; do
+            binary="$name-bin"
+            lipo -create "extracted/x86_64/$binary" "extracted/arm64/$binary" -output "dist/macos-universal/$binary"
+            chmod +x "dist/macos-universal/$binary"
+            lipo "dist/macos-universal/$binary" -verify_arch x86_64 arm64
+          done
+          mv extracted/arm64/{kakasi,xtbconv,info-plists} dist/macos-universal/
+          tar -czf dist/macos-universal.tar.gz -C dist/macos-universal .
+
+      - name: Publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload -R ${{ github.repository }} "${{ needs.create_release.outputs.version }}" dist/macos-universal.tar.gz --clobber

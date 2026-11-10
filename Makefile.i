@@ -1,4 +1,3 @@
-
 OBJS_TPLIST=TPLArray.o TPLDictionary.o TPLException.o TPLNumber.o TPLObject.o TPLPropertyListSerialization.o TPLString.o tinyxml.o tinyxmlerror.o tinyxmlparser.o
 
 TARGET_WIKIPLEXUS=MkXTBWikiplexus$(TARGETPOSTFIX)
@@ -22,19 +21,19 @@ clean:
 	rm -f $(OBJS_TPLIST) $(OBJS_WIKIPLEXUS) $(OBJS_INDEX) $(OBJS_YOMI) $(OBJS_IMAGECOMPLEX) $(OBJS_MKRAX) $(TARGET_WIKIPLEXUS) $(TARGET_INDEX) $(TARGET_IMAGECOMPLEX) $(TARGET_YOMI) $(TARGET_MKRAX)
 
 $(TARGET_WIKIPLEXUS):	$(OBJS_WIKIPLEXUS)
-						$(LD) $(OBJS_WIKIPLEXUS) $(LDFLAGS) -o $(TARGET_WIKIPLEXUS)
+						$(LD) $(OBJS_WIKIPLEXUS) $(LDFLAGS) $(LDLIBS_WIKIPLEXUS) -o $(TARGET_WIKIPLEXUS)
 
 $(TARGET_INDEX):		$(OBJS_INDEX)
-						$(LD) $(OBJS_INDEX) $(LDFLAGS) -o $(TARGET_INDEX)
+						$(LD) $(OBJS_INDEX) $(LDFLAGS) $(LDLIBS_INDEX) -o $(TARGET_INDEX)
 
 $(TARGET_IMAGECOMPLEX):	$(OBJS_IMAGECOMPLEX)
-						$(LD) $(OBJS_IMAGECOMPLEX) $(LDFLAGS) -o $(TARGET_IMAGECOMPLEX)
+						$(LD) $(OBJS_IMAGECOMPLEX) $(LDFLAGS) $(LDLIBS_IMAGECOMPLEX) -o $(TARGET_IMAGECOMPLEX)
 
 $(TARGET_YOMI):			$(OBJS_YOMI)
-						$(LD) $(OBJS_YOMI) $(LDFLAGS) -o $(TARGET_YOMI)
+						$(LD) $(OBJS_YOMI) $(LDFLAGS) $(LDLIBS_YOMI) -o $(TARGET_YOMI)
 
 $(TARGET_MKRAX):			$(OBJS_MKRAX)
-						$(LD) $(OBJS_MKRAX) $(LDFLAGS) -o $(TARGET_MKRAX)
+						$(LD) $(OBJS_MKRAX) $(LDFLAGS) $(LDLIBS_MKRAX) -o $(TARGET_MKRAX)
 
 
 
@@ -119,15 +118,6 @@ tinyxmlerror.o:					$(SRCDIR)/TinyXML/tinyxmlerror.cpp
 
 tinyxmlparser.o:					$(SRCDIR)/TinyXML/tinyxmlparser.cpp
 	$(CXX) -c $< $(CXXFLAGS)
-
-
-
-
-
-
-
-
-
 
 TWRenderDCTcw.o:	../TWRenderDCTcw.cpp XTBook_Prefix.pch.gch
 	$(CXX) -include XTBook_Prefix.pch -c ../TWRenderDCTcw.cpp -o TWRenderDCTcw.o $(CFLAGS) $(CXXFLAGS) -I..

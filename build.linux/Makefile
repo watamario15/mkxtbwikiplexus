@@ -1,17 +1,20 @@
-#PREFIX=/usr/local/i386-mingw32-4.3.0
-#HOST=i386-mingw32
-#CC=$(PREFIX)/bin/$(HOST)-gcc
-#CXX=$(PREFIX)/bin/$(HOST)-g++
-#LD=$(PREFIX)/bin/$(HOST)-g++
-
 CC=gcc
 CXX=g++
 LD=g++
 
-CCFLAGS=-Wall -O3 -D_LARGEFILE_SOURCE=1 -D_LARGEFILE64_SOURCE=1 -D_FILE_OFFSET_BITS=64 -DNDEBUG -I/usr/include/libxml2
+XML2_PREFIX?=/usr
+LD_PREFIX?=/usr/local
+
+CCFLAGS=-Wall -O3 -D_LARGEFILE_SOURCE=1 -D_LARGEFILE64_SOURCE=1 -D_FILE_OFFSET_BITS=64 -DNDEBUG -I$(XML2_PREFIX)/include/libxml2
 CXXFLAGS=$(CCFLAGS)
-LDFLAGS=-L/usr/local/lib -lxml2 -lmecab -lkakasi -llzma
+LDFLAGS=-L$(LD_PREFIX)/lib
+
+LDLIBS_WIKIPLEXUS=-Wl,-Bstatic -lxml2 $(filter-out -lxml2 -llzma -lz,$(XML_PC)) -llzma -lz -Wl,-Bdynamic
+LDLIBS_INDEX=
+LDLIBS_IMAGECOMPLEX=$(LDLIBS_WIKIPLEXUS)
+LDLIBS_YOMI=-lmecab -lkakasi
+LDLIBS_MKRAX=-Wl,-Bstatic -llzma -Wl,-Bdynamic
+
 TARGETPOSTFIX=-bin
 SRCDIR=..
-
 include $(SRCDIR)/Makefile.i
