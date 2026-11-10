@@ -1,0 +1,174 @@
+name: Build
+
+on:
+  push:
+    tags: '*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        type: string
+        required: true
+        description: 'Tag Name to be created'
+
+permissions:
+  contents: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
+  VERSION: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  create_release:
+    name: Create release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release
+        run: |
+          if ! gh release view "$VERSION"; then
+            gh release create "$VERSION" -d -t "$VERSION" -n '## Linux (AMD64, ARM64)
+
+          Depends on:
+
+          - `libmecab2`, `libkakasi2`, and `mecab-ipadic-utf8` on Debian-based.
+          - `mecab-ipadic`, `kakasi-libs`, and `kakasi-dict` on Fedora-based.
+
+          Supports glibc 2.34 and later.
+
+          ## macOS (Intel/Arm Universal)
+
+          You must set KAKASI dictionary pathes in environmental variables `KANWADICTPATH` and `ITAIJIDICTPATH`, and set MeCab dictionary path in the first argument for `YomiGenesis-bin`, both are included in the package. You can set the `MECAB_DICT` environmental variable for the `xtbconv` script.
+
+          Supports macOS 10.13 High Sierra and later.'
+          fi
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    needs: create_release
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libxml2-dev liblzma-dev zlib1g-dev libicu-dev libmecab-dev libkakasi2-dev \
+            mecab-ipadic-utf8 kakasi-dic
+
+      - name: Build
+        run: make -C build.linux -j"$(nproc)" XML2_LDFLAGS="$(pkg-config --static --libs libxml-2.0)"
+
+      - name: Verify and package
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+
+          build.linux/MkXTBWikiplexus-bin -h >/dev/null
+          build.linux/MkXTBIndexDB-bin -h >/dev/null
+          build.linux/MkImageComplex-bin -h >/dev/null
+          build.linux/MkRax-bin -h >/dev/null
+          printf '日本,日本\n' | build.linux/YomiGenesis-bin > "$RUNNER_TEMP/yomi.csv"
+          test -s "$RUNNER_TEMP/yomi.csv"
+
+          mkdir -p "linux-$TARGET_ARCH"
+          mv build.linux/{MkXTBWikiplexus,MkXTBIndexDB,MkImageComplex,YomiGenesis,MkRax}-bin Scripts/{xtbconv,info-plists} "linux-$TARGET_ARCH/"
+          tar -czf "linux-$TARGET_ARCH.tar.gz" -C "linux-$TARGET_ARCH" .
+
+      - name: Upload
+        run: gh release upload "$VERSION" "linux-${{ matrix.arch }}.tar.gz" --clobber
+
+  macos:
+    name: macOS Universal (x86_64 + arm64)
+    needs: create_release
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/prefix"
+          mkdir -p "$prefix"
+          flags="-arch x86_64 -arch arm64 -Xarch_x86_64 -mmacosx-version-min=10.13 -Xarch_arm64 -mmacosx-version-min=11.0"
+
+          gh release download -R tukaani-project/xz -p 'xz-*.tar.xz' -O "$RUNNER_TEMP/xz.tar.xz"
+          tar -xJf "$RUNNER_TEMP/xz.tar.xz" -C "$RUNNER_TEMP"
+          (
+            cd "$RUNNER_TEMP"/xz-*
+            CFLAGS="-O3 $flags" CXXFLAGS="-O3 $flags" LDFLAGS="$flags" \
+              ./configure --prefix="$prefix" --disable-shared --enable-static --disable-nls
+            make -j"$(sysctl -n hw.ncpu)"
+            make install
+          )
+          lipo "$prefix/lib/liblzma.a" -verify_arch x86_64 arm64
+
+          git clone --depth 1 https://github.com/loretoparisi/kakasi.git "$RUNNER_TEMP/kakasi"
+          (
+            cd "$RUNNER_TEMP/kakasi"
+            CFLAGS="-O3 -Wno-error=implicit-function-declaration $flags" CXXFLAGS="-O3 $flags" LDFLAGS="$flags" \
+              ./configure --prefix="$prefix" --disable-shared --enable-static
+            make -j"$(sysctl -n hw.ncpu)"
+            make install
+          )
+          lipo "$prefix/lib/libkakasi.a" -verify_arch x86_64 arm64
+
+          git clone --depth 1 https://github.com/taku910/mecab.git "$RUNNER_TEMP/mecab"
+          (
+            cd "$RUNNER_TEMP/mecab/mecab"
+            CPP='clang -E -arch arm64' CXXCPP='clang++ -E -arch arm64' CC="clang -O3 $flags" CXX="clang++ -O3 $flags" LD="clang++ $flags" \
+              ./configure --prefix="$prefix" --disable-shared --enable-static
+            make -j"$(sysctl -n hw.ncpu)"
+            make install
+          )
+          lipo "$prefix/lib/libmecab.a" -verify_arch x86_64 arm64
+          (
+            cd "$RUNNER_TEMP/mecab/mecab-ipadic"
+            ./configure --prefix="$prefix" --with-charset=utf8 --with-mecab-config="$prefix/bin/mecab-config"
+            make -j"$(sysctl -n hw.ncpu)"
+            make install
+          )
+
+          make -C build.osx -j"$(sysctl -n hw.ncpu)" DEPS_PREFIX="$prefix" ARCHFLAGS="$flags"
+
+      - name: Verify and package
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/prefix"
+
+          build.osx/MkXTBWikiplexus-bin -h >/dev/null
+          build.osx/MkXTBIndexDB-bin -h >/dev/null
+          build.osx/MkImageComplex-bin -h >/dev/null
+          build.osx/MkRax-bin -h >/dev/null
+          KANWADICTPATH="$prefix/share/kakasi/kanwadict" \
+          ITAIJIDICTPATH="$prefix/share/kakasi/itaijidict" \
+            build.osx/YomiGenesis-bin "$prefix/lib/mecab/dic/ipadic" \
+            < <(printf '日本,日本\n') > "$RUNNER_TEMP/yomi.csv"
+          test -s "$RUNNER_TEMP/yomi.csv"
+
+          mkdir macos
+          for name in MkXTBWikiplexus MkXTBIndexDB MkImageComplex YomiGenesis MkRax; do
+            binary="build.osx/$name-bin"
+            test -x "$binary"
+            lipo "$binary" -verify_arch x86_64 arm64
+            mv "$binary" "macos/"
+          done
+          mv Scripts/{xtbconv,info-plists} "macos/"
+          mv "$prefix/share/kakasi" "macos/"
+          mv "$prefix/lib/mecab/dic/ipadic" "macos/mecab-ipadic"
+          tar -czf "macos.tar.gz" -C "macos" .
+
+      - name: Upload
+        run: gh release upload "$VERSION" macos.tar.gz --clobber

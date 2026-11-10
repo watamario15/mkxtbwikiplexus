@@ -1,17 +1,20 @@
-#PREFIX=/usr/local/i386-mingw32-4.3.0
-#HOST=i386-mingw32
-#CC=$(PREFIX)/bin/$(HOST)-gcc
-#CXX=$(PREFIX)/bin/$(HOST)-g++
-#LD=$(PREFIX)/bin/$(HOST)-g++
-
 CC=clang
 CXX=clang++
 LD=clang++
 
-CCFLAGS=-Wall -O3 -D_LARGEFILE_SOURCE=1 -D_LARGEFILE64_SOURCE=1 -D_FILE_OFFSET_BITS=64 -DNDEBUG -I/opt/homebrew/opt/mecab/include -I/opt/homebrew/opt/xz/include
-CXXFLAGS=$(CCFLAGS)
-LDFLAGS=-L/opt/homebrew/opt/mecab/lib -lmecab -lkakasi -lxml2 -llzma -liconv
-TARGETPOSTFIX=-bin
-SRCDIR=..
+DEPS_PREFIX?=/opt/homebrew
+XZ_PREFIX?=$(DEPS_PREFIX)
+MECAB_PREFIX?=$(DEPS_PREFIX)
+KAKASI_PREFIX?=$(DEPS_PREFIX)
 
+CXXFLAGS+= $(ARCHFLAGS) -O3 -D_LARGEFILE_SOURCE=1 -D_LARGEFILE64_SOURCE=1 -D_FILE_OFFSET_BITS=64 -DNDEBUG -I$(XZ_PREFIX)/include -I$(MECAB_PREFIX)/include -I$(KAKASI_PREFIX)/include
+LDFLAGS+= $(ARCHFLAGS)
+LDLIBS_WIKIPLEXUS+= -lxml2
+LDLIBS_INDEX+=
+LDLIBS_IMAGECOMPLEX+= $(LDLIBS_WIKIPLEXUS)
+LDLIBS_YOMI+= $(MECAB_PREFIX)/lib/libmecab.a $(KAKASI_PREFIX)/lib/libkakasi.a -liconv
+LDLIBS_MKRAX+= $(XZ_PREFIX)/lib/liblzma.a
+
+TARGETPOSTFIX?=-bin
+SRCDIR=..
 include $(SRCDIR)/Makefile.i
